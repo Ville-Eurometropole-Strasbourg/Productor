@@ -21,6 +21,9 @@
  *                                                                         *
  ***************************************************************************/
 """
+from PyQt5.QtCore import Qt
+from PyQt5.QtWidgets import QFileDialog
+
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
@@ -30,6 +33,13 @@ from .resources import *
 # Import the code for the dialog
 from .productor_dialog import ProductorDialog
 import os.path
+import os
+import sys
+
+
+sys.path.append(os.getcwd()) 
+
+import sqlalchemy as db
 
 
 class Productor:
@@ -189,12 +199,37 @@ class Productor:
             self.first_start = False
             self.dlg = ProductorDialog()
 
+        # Keep windows on top
+        self.dlg.setWindowFlags(Qt.WindowStaysOnTopHint)
+
+        # Connect the buttons 
+        self.dlg.pushButton.clicked.connect(self.run_1)
+        self.dlg.toolButton.clicked.connect(self.choose)
+        self.dlg.pushButton_2.clicked.connect(self.close)
+
+        # Database connection 
+        self.conn_string = 'postgresql://@bdsigli.cus.fr:34000/sigli_svoip'
+        # Connection 
+        engine = db.create_engine(self.conn_string)
+        insp = db.inspect(engine)
+        list = insp.get_schema_names()
+
+        # Populate combo box 
+        self.dlg.comboBox.addItems(list)
+
         # show the dialog
         self.dlg.show()
-        # Run the dialog event loop
-        result = self.dlg.exec_()
-        # See if OK was pressed
-        if result:
-            # Do something useful here - delete the line containing pass and
-            # substitute with your code.
-            pass
+       
+    def run_1(self) :
+        return None
+    
+    def choose(self):
+        dialog = QFileDialog()
+        self.folder_path = dialog.getExistingDirectory(None, "Select Folder")
+        if self.folder_path:
+            self.dlg.lineEdit.setText(self.folder_path)
+
+    def close(self) : 
+        self.dlg.comboBox.clear()
+        self.dlg.close()
+
