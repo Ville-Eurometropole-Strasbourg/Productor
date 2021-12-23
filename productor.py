@@ -22,7 +22,7 @@
  ***************************************************************************/
 """
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFileDialog
+from PyQt5.QtWidgets import QFileDialog, QErrorMessage
 
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
@@ -30,16 +30,17 @@ from qgis.PyQt.QtWidgets import QAction
 
 # Initialize Qt resources from file resources.py
 from .resources import *
+
 # Import the code for the dialog
 from .productor_dialog import ProductorDialog
 import os.path
 import os
 import sys
 
-
-sys.path.append(os.getcwd()) 
+sys.path.append(os.path.join(os.path.dirname(__file__)))
 
 import sqlalchemy as db
+from sqlalchemy import exc
 
 
 class Productor:
@@ -200,26 +201,20 @@ class Productor:
             self.dlg = ProductorDialog()
 
         # Keep windows on top
-        self.dlg.setWindowFlags(Qt.WindowStaysOnTopHint)
+        # self.dlg.setWindowFlags(Qt.WindowStaysOnTopHint)
 
         # Connect the buttons 
-        self.dlg.pushButton.clicked.connect(self.run_1)
-        self.dlg.toolButton.clicked.connect(self.choose)
+        self.dlg.pushButton.clicked.connect(self.change_background)
         self.dlg.pushButton_2.clicked.connect(self.close)
-
-        # Database connection 
-        self.conn_string = 'postgresql://@bdsigli.cus.fr:34000/sigli_svoip'
-        # Connection 
-        engine = db.create_engine(self.conn_string)
-        insp = db.inspect(engine)
-        list = insp.get_schema_names()
-
-        # Populate combo box 
-        self.dlg.comboBox.addItems(list)
+        self.dlg.pushButton_3.clicked.connect(self.connection)
+        self.dlg.toolButton.clicked.connect(self.choose)
 
         # show the dialog
         self.dlg.show()
-       
+
+        # Clean on closing 
+        self.clean()
+
     def run_1(self) :
         return None
     
@@ -230,6 +225,44 @@ class Productor:
             self.dlg.lineEdit.setText(self.folder_path)
 
     def close(self) : 
-        self.dlg.comboBox.clear()
+        self.dlg.comboBox_2.clear()
+        self.dlg.comboBox_3.clear()
+        self.dlg.lineEdit_2.clear()
+        self.dlg.lineEdit.clear()
+        self.dlg.lineEdit_2.setStyleSheet("")
         self.dlg.close()
+    
+    def clean(self) :
+        self.dlg.comboBox_2.clear()
+        self.dlg.comboBox_3.clear()
+        self.dlg.lineEdit_2.clear()
+        self.dlg.lineEdit.clear()
+        self.dlg.lineEdit_2.setStyleSheet("")
+    
+    def connection(self) : 
+        conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
+        try :
+            # Connection 
+            engine = db.create_engine(conn_string)
+            insp = db.inspect(engine)
+            list = insp.get_schema_names()
+            # clean the previous list
+            self.dlg.comboBox_3.clear()
+            # Populate combo box 
+            self.dlg.comboBox_3.addItems(list)
+            # Color in green 
+            self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
+        except exc.SQLAlchemyError as err :
+            # Color in red
+            self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
+            self.error_dialog = QErrorMessage()
+            self.error_dialog.showMessage('Erreur de Connection')
+            pass
+
+    def change_background(self):
+
+        self.dlg.comboBox_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
+
+
+
 
