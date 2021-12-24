@@ -37,10 +37,14 @@ import os.path
 import os
 import sys
 
-sys.path.append(os.path.join(os.path.dirname(__file__)))
+
+sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\dependencies')
 
 import sqlalchemy as db
+import psycopg2
 from sqlalchemy import exc
+import geoalchemy2
+import shutil
 
 
 class Productor:
@@ -204,10 +208,13 @@ class Productor:
         # self.dlg.setWindowFlags(Qt.WindowStaysOnTopHint)
 
         # Connect the buttons 
-        self.dlg.pushButton.clicked.connect(self.change_background)
+        self.dlg.pushButton.clicked.connect(self.dump)
         self.dlg.pushButton_2.clicked.connect(self.close)
         self.dlg.pushButton_3.clicked.connect(self.connection)
         self.dlg.toolButton.clicked.connect(self.choose)
+
+        # Populate the tables
+        self.dlg.comboBox_3.activated.connect(self.table)
 
         # show the dialog
         self.dlg.show()
@@ -215,12 +222,133 @@ class Productor:
         # Clean on closing 
         self.clean()
 
-    def run_1(self) :
-        return None
-    
+    def table(self) :
+        self.schema = self.dlg.comboBox_3.currentText()
+        tables = self.insp.get_table_names(schema = self.schema)
+        self.dlg.comboBox_2.clear()
+        self.dlg.comboBox_2.addItems(sorted(tables))
+
+    def dump(self) :
+        try :
+            # Set the default vars
+            dict_enum = {}
+            enum_list = []
+            str_id = None
+            cst_val = []
+            pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\dependencies\\pg_dump.exe"
+            database = self.dlg.lineEdit_2.text()
+            schema = self.dlg.comboBox_3.currentText()
+            table = self.dlg.comboBox_2.currentText()
+            folder = self.folder_path + table
+
+            if os.path.exists(folder) is False : 
+                os.mkdir(folder)
+            self.dlg.progressBar.setValue(10)
+            # Throw an error if there's a space in the folder path
+            if ' ' in folder :
+                raise Exception('Le chemin de fichier comporte un espace')
+
+            # Dump the basefile    
+            pg_string = "{} --host bdsigli.cus.fr --port 34000  --verbose --format=p -s -O -x --schema-only --no-owner --section=pre-data --section=post-data --encoding WIN1252 --table {}.{} {} > {}\\{}.sql".format(pg_path, schema, table, database, folder, table)            
+            os.popen(pg_string)
+            self.dlg.progressBar.setValue(20)
+        
+            # Récupération des données annexe de la table (énumérations et séquences)
+            columns_table = self.insp.get_columns(table, schema)
+            self.dlg.progressBar.setValue(30)
+            for c in columns_table : 
+                # Récupération de l'identifiant
+                if 'seq' in str(c['default']) :
+                    str_id = str(c['default'])
+                    sub1 = "nextval('"
+                    sub2 = "_seq'::regclass"
+                    idx1 = str_id.index(sub1)
+                    idx2 = str_id.index(sub2)
+                    str_id = str_id[idx1 + len(sub1) : idx2]
+                    
+                # Récupération des énumérations
+                if 'admin_sigli' in str(c['type']) :
+                    self.cur.execute("SELECT unnest(enum_range(NULL::{}))".format(c['type']))
+                    for i in self.cur.fetchall() : 
+                        cst_val.append(i[0])
+                    dict_enum.update( {c['type'].name : cst_val})
+                    cst_val = []
+            self.dlg.progressBar.setValue(40)
+            # Ajout de sql des énumérations dans une liste
+            for item in dict_enum :
+                s = "CREATE TYPE admin_sigli.{} AS ENUM({});".format(item, dict_enum[item] ).replace('[', '').replace(']', '')
+                enum_list.append(s)
+            self.dlg.progressBar.setValue(50)
+            if str_id :
+
+                # Ajout des grants
+                file_object = open('{}\{}_grants.sql'.format(folder, table), 'w', encoding="cp1252")
+                file_object.write(f'''---Grants
+                GRANT SELECT ON TABLE {str_id}_seq TO role_sigli_c;
+                GRANT USAGE ON SCHEMA {schema} TO role_sigli_c;
+                GRANT SELECT ON TABLE {schema}.{table} TO role_sigli_c;
+                GRANT USAGE ON TABLE {str_id}_seq TO role_sigli_c;
+                GRANT USAGE ON SCHEMA {schema} TO role_sigli_{schema}_a;
+                GRANT UPDATE ON TABLE {str_id}_seq TO role_sigli_{schema}_a;
+                GRANT SELECT ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT UPDATE ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT INSERT ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT USAGE ON TABLE {str_id}_seq TO role_sigli_{schema}_a;
+                GRANT DELETE ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT SELECT ON TABLE {str_id}_seq TO role_sigli_{schema}_a;''')
+                self.dlg.progressBar.setValue(60)
+                # Ajout de la séquence 
+                file_object = open('{}\{}_seq.sql'.format(folder, table), 'w', encoding="cp1252")
+                file_object.write(f'''---Sequence
+                CREATE SEQUENCE IF NOT EXISTS {str_id}_seq
+                    START WITH 1
+                    INCREMENT BY 1
+                    NO MINVALUE
+                    NO MAXVALUE
+                    CACHE 1;
+
+                ALTER SEQUENCE {str_id}_seq
+                    OWNER TO sigli;''')
+            else :
+
+                # Ajout des grants
+                file_object = open('{}\{}_grants.sql'.format(folder, table), 'w', encoding="cp1252")
+                file_object.write(f'''---Grants
+                GRANT USAGE ON SCHEMA {schema} TO role_sigli_c;
+                GRANT SELECT ON TABLE {schema}.{table} TO role_sigli_c;
+                GRANT USAGE ON SCHEMA {schema} TO role_sigli_{schema}_a;
+                GRANT SELECT ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT UPDATE ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT INSERT ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
+                GRANT DELETE ON TABLE {schema}.{table} TO role_sigli_{schema}_a;''')
+                self.dlg.progressBar.setValue(60)
+            # Ajout des énumérations
+            file_object = open('{}\{}_enums.sql'.format(folder, table), 'w', encoding="cp1252")
+            file_object.write('--Creation des Enumérations\n')
+            for enum in enum_list : 
+                file_object.write('{}\n'.format(enum))
+            file_object.close()
+            self.dlg.progressBar.setValue(100)
+            self.dlg.progressBar.setValue(0)
+
+            '''
+            # Zipper le dossier
+            shutil.make_archive(table, 'zip', self.folder_path, folder)
+            shutil.move('{}.zip'.format(table), self.folder_path)
+            if os.path.exists(folder) : 
+                shutil.rmtree(folder)
+            '''
+
+        except Exception as e : 
+            self.error_dialog = QErrorMessage()
+            self.error_dialog.showMessage(str(e))
+            self.dlg.progressBar.setValue(0)
+            pass 
+
     def choose(self):
         dialog = QFileDialog()
         self.folder_path = dialog.getExistingDirectory(None, "Select Folder")
+
         if self.folder_path:
             self.dlg.lineEdit.setText(self.folder_path)
 
@@ -230,6 +358,7 @@ class Productor:
         self.dlg.lineEdit_2.clear()
         self.dlg.lineEdit.clear()
         self.dlg.lineEdit_2.setStyleSheet("")
+        self.dlg.progressBar.setValue(0)
         self.dlg.close()
     
     def clean(self) :
@@ -238,31 +367,28 @@ class Productor:
         self.dlg.lineEdit_2.clear()
         self.dlg.lineEdit.clear()
         self.dlg.lineEdit_2.setStyleSheet("")
+        self.dlg.progressBar.setValue(0)
     
     def connection(self) : 
         conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
         try :
             # Connection 
             engine = db.create_engine(conn_string)
-            insp = db.inspect(engine)
-            list = insp.get_schema_names()
+            self.insp = db.inspect(engine)
+            list = self.insp.get_schema_names()
+            conn = psycopg2.connect(conn_string)
+            self.cur = conn.cursor()
             # clean the previous list
+            self.dlg.comboBox_2.clear()
             self.dlg.comboBox_3.clear()
             # Populate combo box 
             self.dlg.comboBox_3.addItems(list)
             # Color in green 
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
         except exc.SQLAlchemyError as err :
-            # Color in red
+            self.clean()
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
             self.error_dialog = QErrorMessage()
             self.error_dialog.showMessage('Erreur de Connection')
-            pass
-
-    def change_background(self):
-
-        self.dlg.comboBox_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
-
-
 
 
