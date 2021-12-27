@@ -28,6 +28,7 @@ from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
+
 # Initialize Qt resources from file resources.py
 from .resources import *
 
@@ -37,14 +38,14 @@ import os.path
 import os
 import sys
 
-
-sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\dependencies')
+sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\include\\python')
 
 import sqlalchemy as db
 import psycopg2
 from sqlalchemy import exc
 import geoalchemy2
-import shutil
+import subprocess
+# import shutil
 
 
 class Productor:
@@ -212,6 +213,7 @@ class Productor:
         self.dlg.pushButton_2.clicked.connect(self.close)
         self.dlg.pushButton_3.clicked.connect(self.connection)
         self.dlg.toolButton.clicked.connect(self.choose)
+        
 
         # Populate the tables
         self.dlg.comboBox_3.activated.connect(self.table)
@@ -221,6 +223,9 @@ class Productor:
 
         # Clean on closing 
         self.clean()
+
+
+
 
     def table(self) :
         self.schema = self.dlg.comboBox_3.currentText()
@@ -235,21 +240,19 @@ class Productor:
             enum_list = []
             str_id = None
             cst_val = []
-            pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\dependencies\\pg_dump.exe"
+            pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
+            pg_path = pg_path.replace('/', '\\')
             database = self.dlg.lineEdit_2.text()
             schema = self.dlg.comboBox_3.currentText()
             table = self.dlg.comboBox_2.currentText()
-            folder = self.folder_path + table
-
+            folder = self.folder_path + '\\' + table
+            
             if os.path.exists(folder) is False : 
                 os.mkdir(folder)
             self.dlg.progressBar.setValue(10)
-            # Throw an error if there's a space in the folder path
-            if ' ' in folder :
-                raise Exception('Le chemin de fichier comporte un espace')
 
             # Dump the basefile    
-            pg_string = "{} --host bdsigli.cus.fr --port 34000  --verbose --format=p -s -O -x --schema-only --no-owner --section=pre-data --section=post-data --encoding WIN1252 --table {}.{} {} > {}\\{}.sql".format(pg_path, schema, table, database, folder, table)            
+            pg_string = r'{} --host bdsigli.cus.fr --port 34000  --verbose --format=p -s -O -x --schema-only --no-owner --section=pre-data --section=post-data --encoding WIN1252 --table {}.{} {} > "{}\{}.sql"'.format(pg_path, schema, table, database, folder, table)            
             os.popen(pg_string)
             self.dlg.progressBar.setValue(20)
         
@@ -346,11 +349,16 @@ class Productor:
             pass 
 
     def choose(self):
-        dialog = QFileDialog()
-        self.folder_path = dialog.getExistingDirectory(None, "Select Folder")
+        
+        self.folder_path = QFileDialog.getExistingDirectory(self.dlg, 'Select Folder')
+        # folderpath = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder')
+        self.folder_path = self.folder_path.replace('/', '\\')
 
         if self.folder_path:
             self.dlg.lineEdit.setText(self.folder_path)
+            self.dlg.toolButton.clicked.disconnect()
+
+
 
     def close(self) : 
         self.dlg.comboBox_2.clear()
@@ -360,6 +368,7 @@ class Productor:
         self.dlg.lineEdit_2.setStyleSheet("")
         self.dlg.progressBar.setValue(0)
         self.dlg.close()
+
     
     def clean(self) :
         self.dlg.comboBox_2.clear()
@@ -368,6 +377,7 @@ class Productor:
         self.dlg.lineEdit.clear()
         self.dlg.lineEdit_2.setStyleSheet("")
         self.dlg.progressBar.setValue(0)
+        
     
     def connection(self) : 
         conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
