@@ -28,7 +28,6 @@ from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
 
-
 # Initialize Qt resources from file resources.py
 from .resources import *
 
@@ -38,19 +37,17 @@ import os.path
 import os
 import sys
 
+# Ajout des dépendances au path du plugin (sqlalchemy, pgdump etc)
 sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\include\\python')
 
+# Import des librairies
 import sqlalchemy as db
 import psycopg2
-from sqlalchemy import exc
 import geoalchemy2
-import subprocess
 # import shutil
 
-
 class Productor:
-    """QGIS Plugin Implementation."""
-
+    """QGIS Plugin Implementation."""  
     def __init__(self, iface):
         """Constructor.
 
@@ -97,7 +94,6 @@ class Productor:
         """
         # noinspection PyTypeChecker,PyArgumentList,PyCallByClass
         return QCoreApplication.translate('Productor', message)
-
 
     def add_action(
         self,
@@ -186,7 +182,6 @@ class Productor:
         # will be set False in run()
         self.first_start = True
 
-
     def unload(self):
         """Removes the plugin menu item and icon from QGIS GUI."""
         for action in self.actions:
@@ -194,7 +189,6 @@ class Productor:
                 self.tr(u'&Productor'),
                 action)
             self.iface.removeToolBarIcon(action)
-
 
     def run(self):
         """Run method that performs all the real work"""
@@ -208,34 +202,33 @@ class Productor:
         # Keep windows on top
         # self.dlg.setWindowFlags(Qt.WindowStaysOnTopHint)
 
-        # Connect the buttons 
+        # Connection des bouttons
         self.dlg.pushButton.clicked.connect(self.dump)
-        self.dlg.pushButton_2.clicked.connect(self.close)
+        self.dlg.pushButton_2.clicked.connect(self.closeEvent)
         self.dlg.pushButton_3.clicked.connect(self.connection)
         self.dlg.toolButton.clicked.connect(self.choose)
         
 
-        # Populate the tables
+        # Remplissage du menu des tables
         self.dlg.comboBox_3.activated.connect(self.table)
 
-        # show the dialog
+        # Affichage de la fenêtre
         self.dlg.show()
 
-        # Clean on closing 
-        self.clean()
+        # Netoyage à la fermeture 
+        self.dlg.closeEvent = self.closeEvent
 
-
-
-
+    # Récupération des tables    
     def table(self) :
         self.schema = self.dlg.comboBox_3.currentText()
         tables = self.insp.get_table_names(schema = self.schema)
         self.dlg.comboBox_2.clear()
         self.dlg.comboBox_2.addItems(sorted(tables))
 
+    # Fonction de Dump (principale)
     def dump(self) :
         try :
-            # Set the default vars
+            # Variables par défaut
             dict_enum = {}
             enum_list = []
             str_id = None
@@ -247,11 +240,12 @@ class Productor:
             table = self.dlg.comboBox_2.currentText()
             folder = self.folder_path + '\\' + table
             
+            # Création du dossier s'il n'existe pas
             if os.path.exists(folder) is False : 
                 os.mkdir(folder)
             self.dlg.progressBar.setValue(10)
 
-            # Dump the basefile    
+            # Dump de la table via pgdump  
             pg_string = r'{} --host bdsigli.cus.fr --port 34000  --verbose --format=p -s -O -x --schema-only --no-owner --section=pre-data --section=post-data --encoding WIN1252 --table {}.{} {} > "{}\{}.sql"'.format(pg_path, schema, table, database, folder, table)            
             os.popen(pg_string)
             self.dlg.progressBar.setValue(20)
@@ -260,6 +254,7 @@ class Productor:
             columns_table = self.insp.get_columns(table, schema)
             self.dlg.progressBar.setValue(30)
             for c in columns_table : 
+
                 # Récupération de l'identifiant
                 if 'seq' in str(c['default']) :
                     str_id = str(c['default'])
@@ -277,6 +272,7 @@ class Productor:
                     dict_enum.update( {c['type'].name : cst_val})
                     cst_val = []
             self.dlg.progressBar.setValue(40)
+
             # Ajout de sql des énumérations dans une liste
             for item in dict_enum :
                 s = "CREATE TYPE admin_sigli.{} AS ENUM({});".format(item, dict_enum[item] ).replace('[', '').replace(']', '')
@@ -300,6 +296,7 @@ class Productor:
                 GRANT DELETE ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
                 GRANT SELECT ON TABLE {str_id}_seq TO role_sigli_{schema}_a;''')
                 self.dlg.progressBar.setValue(60)
+
                 # Ajout de la séquence 
                 file_object = open('{}\{}_seq.sql'.format(folder, table), 'w', encoding="cp1252")
                 file_object.write(f'''---Sequence
@@ -325,6 +322,7 @@ class Productor:
                 GRANT INSERT ON TABLE {schema}.{table} TO role_sigli_{schema}_a;
                 GRANT DELETE ON TABLE {schema}.{table} TO role_sigli_{schema}_a;''')
                 self.dlg.progressBar.setValue(60)
+
             # Ajout des énumérations
             file_object = open('{}\{}_enums.sql'.format(folder, table), 'w', encoding="cp1252")
             file_object.write('--Creation des Enumérations\n')
@@ -341,44 +339,21 @@ class Productor:
             if os.path.exists(folder) : 
                 shutil.rmtree(folder)
             '''
-
+        # Message d'erreur
         except Exception as e : 
             self.error_dialog = QErrorMessage()
             self.error_dialog.showMessage(str(e))
             self.dlg.progressBar.setValue(0)
             pass 
-
+    
+    # Selection du dossier
     def choose(self):
-        
         self.folder_path = QFileDialog.getExistingDirectory(self.dlg, 'Select Folder')
-        # folderpath = QtWidgets.QFileDialog.getExistingDirectory(self, 'Select Folder')
         self.folder_path = self.folder_path.replace('/', '\\')
-
         if self.folder_path:
             self.dlg.lineEdit.setText(self.folder_path)
-            self.dlg.toolButton.clicked.disconnect()
 
-
-
-    def close(self) : 
-        self.dlg.comboBox_2.clear()
-        self.dlg.comboBox_3.clear()
-        self.dlg.lineEdit_2.clear()
-        self.dlg.lineEdit.clear()
-        self.dlg.lineEdit_2.setStyleSheet("")
-        self.dlg.progressBar.setValue(0)
-        self.dlg.close()
-
-    
-    def clean(self) :
-        self.dlg.comboBox_2.clear()
-        self.dlg.comboBox_3.clear()
-        self.dlg.lineEdit_2.clear()
-        self.dlg.lineEdit.clear()
-        self.dlg.lineEdit_2.setStyleSheet("")
-        self.dlg.progressBar.setValue(0)
-        
-    
+    # Connection à la base
     def connection(self) : 
         conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
         try :
@@ -395,10 +370,22 @@ class Productor:
             self.dlg.comboBox_3.addItems(list)
             # Color in green 
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
-        except exc.SQLAlchemyError as err :
-            self.clean()
+        except db.exc.SQLAlchemyError as err :
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
             self.error_dialog = QErrorMessage()
-            self.error_dialog.showMessage('Erreur de Connection')
-
+            self.error_dialog.showMessage('Erreur de Connection' + ':' + str(err))
+    
+    # Fonction de fermeture 
+    def closeEvent(self, event):
+        self.dlg.comboBox_2.clear()
+        self.dlg.comboBox_3.clear()
+        self.dlg.lineEdit_2.clear()
+        self.dlg.lineEdit.clear()
+        self.dlg.lineEdit_2.setStyleSheet("")
+        try : 
+            self.dlg.toolButton.clicked.disconnect()
+        except : 
+            pass
+        self.dlg.progressBar.setValue(0)
+        self.dlg.close()
 
