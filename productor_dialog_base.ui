@@ -60,7 +60,7 @@
      <item>
       <widget class="QLabel" name="label_3">
        <property name="text">
-        <string>Dossier de sortie (Sans espaces)</string>
+        <string>Dossier de sortie</string>
        </property>
       </widget>
      </item>

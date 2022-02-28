@@ -229,7 +229,6 @@ class Productor:
     def dump(self) :
         try :
             # Variables par défaut
-            dict_enum = {}
             enum_list = []
             str_id = None
             cst_val = []
@@ -253,6 +252,9 @@ class Productor:
             # Récupération des données annexe de la table (énumérations et séquences)
             columns_table = self.insp.get_columns(table, schema)
             self.dlg.progressBar.setValue(30)
+            self.cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum GROUP BY enumtypid;")
+            enum_list = self.cur.fetchall()
+
             for c in columns_table : 
 
                 # Récupération de l'identifiant
@@ -263,21 +265,17 @@ class Productor:
                     idx1 = str_id.index(sub1)
                     idx2 = str_id.index(sub2)
                     str_id = str_id[idx1 + len(sub1) : idx2]
-                    
+
                 # Récupération des énumérations
-                if 'admin_sigli' in str(c['type']) :
-                    self.cur.execute("SELECT unnest(enum_range(NULL::{}))".format(c['type']))
-                    for i in self.cur.fetchall() : 
+                for i in enum_list :
+                    if str(c['type']) in i[0] :
                         cst_val.append(i[0])
-                    dict_enum.update( {c['type'].name : cst_val})
-                    cst_val = []
+                    
             self.dlg.progressBar.setValue(40)
 
-            # Ajout de sql des énumérations dans une liste
-            for item in dict_enum :
-                s = "CREATE TYPE admin_sigli.{} AS ENUM({});".format(item, dict_enum[item] ).replace('[', '').replace(']', '')
-                enum_list.append(s)
+            cst_val = list(dict.fromkeys(cst_val))
             self.dlg.progressBar.setValue(50)
+            
             if str_id :
 
                 # Ajout des grants
@@ -326,8 +324,8 @@ class Productor:
             # Ajout des énumérations
             file_object = open('{}\{}_enums.sql'.format(folder, table), 'w', encoding="cp1252")
             file_object.write('--Creation des Enumérations\n')
-            for enum in enum_list : 
-                file_object.write('{}\n'.format(enum))
+            for val in cst_val : 
+                file_object.write('{}\n'.format(val))
             file_object.close()
             self.dlg.progressBar.setValue(100)
             self.dlg.progressBar.setValue(0)
