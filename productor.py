@@ -246,7 +246,8 @@ class Productor:
 
             # Dump de la table via pgdump  
             pg_string = r'{} --host bdsigli.cus.fr --port 34000  --verbose --format=p -s -O -x --schema-only --no-owner --section=pre-data --section=post-data --encoding WIN1252 --table {}.{} {} > "{}\{}.sql"'.format(pg_path, schema, table, database, folder, table)            
-            os.popen(pg_string)
+            process = os.popen(pg_string)
+            process.close()
             self.dlg.progressBar.setValue(20)
         
             # Récupération des données annexe de la table (énumérations et séquences)
@@ -280,6 +281,7 @@ class Productor:
 
                 # Ajout des grants
                 file_object = open('{}\{}_grants.sql'.format(folder, table), 'w', encoding="cp1252")
+                file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                 file_object.write(f'''---Grants
                 GRANT SELECT ON TABLE {str_id}_seq TO role_sigli_c;
                 GRANT USAGE ON SCHEMA {schema} TO role_sigli_c;
@@ -297,6 +299,7 @@ class Productor:
 
                 # Ajout de la séquence 
                 file_object = open('{}\{}_seq.sql'.format(folder, table), 'w', encoding="cp1252")
+                file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                 file_object.write(f'''---Sequence
                 CREATE SEQUENCE IF NOT EXISTS {str_id}_seq
                     START WITH 1
@@ -311,6 +314,7 @@ class Productor:
 
                 # Ajout des grants
                 file_object = open('{}\{}_grants.sql'.format(folder, table), 'w', encoding="cp1252")
+                file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                 file_object.write(f'''---Grants
                 GRANT USAGE ON SCHEMA {schema} TO role_sigli_c;
                 GRANT SELECT ON TABLE {schema}.{table} TO role_sigli_c;
@@ -323,10 +327,19 @@ class Productor:
 
             # Ajout des énumérations
             file_object = open('{}\{}_enums.sql'.format(folder, table), 'w', encoding="cp1252")
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
             file_object.write('--Creation des Enumérations\n')
             for val in cst_val : 
                 file_object.write('{}\n'.format(val))
             file_object.close()
+            
+            # Ajout de la phrase de contrôle
+            file_object = open('{}\{}.sql'.format(folder, table), 'r+', encoding="cp1252")
+            content = file_object.read()
+            file_object.seek(0,0)
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
+            file_object.close()
+
             self.dlg.progressBar.setValue(100)
             self.dlg.progressBar.setValue(0)
 
