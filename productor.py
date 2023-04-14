@@ -13,7 +13,6 @@ import sys
 sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\include\\python')
 import sqlalchemy as db
 import psycopg2
-import geoalchemy2
 
 class DumpTask(QgsTask):
     def __init__(self, pg_string):
@@ -160,31 +159,20 @@ class Productor:
                     file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
                     file_object.close()
                 # ENUMS
-                columns_table = self.insp.get_columns(table, schema)
-                self.cur.execute("SELECT format( 'DROP TYPE IF EXISTS %s;', enumtypid::regtype) FROM pg_enum GROUP BY enumtypid;")
-                enum_drop_list = self.cur.fetchall()
-                for c in columns_table : 
-                    for i in enum_drop_list :
-                        if str(c['type']) in i[0] :
-                            cst_val_drop.append(i[0])
-                cst_val_drop = list(dict.fromkeys(cst_val_drop))
+                self.cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
+                columns_table = self.cur.fetchall()
+                for c in columns_table:
+                    column_type = c[1]  
+                    self.cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum WHERE enumtypid::regtype = '{}'::regtype GROUP BY enumtypid;".format(column_type))
+                    val = self.cur.fetchone()[0]
+                    cst_val.append(str(val))
+                cst_val = list(dict.fromkeys(cst_val))
                 file_object = open('{}\\enums.sql'.format(folder), 'a', encoding="cp1252")
                 if file_object.tell() == 0 :
                     file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                     file_object.write('--Création des Enumérations\n')
-                for val in cst_val_drop : 
-                    file_object.write('{}\n'.format(val))
-                file_object.close()
-                self.cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum GROUP BY enumtypid;")
-                enum_list = self.cur.fetchall()
-                for c in columns_table : 
-                    for i in enum_list :
-                        if str(c['type']) in i[0] :
-                            cst_val.append(i[0])    
-                cst_val = list(dict.fromkeys(cst_val))
-                file_object = open('{}\\enums.sql'.format(folder), 'a', encoding="cp1252")
-                for val in cst_val : 
-                    file_object.write('{}\n'.format(val))
+                for valeur in cst_val :
+                    file_object.write('{}\n'.format(str(valeur)))
                 file_object.close()
                 # Functions
                 self.cur.execute("SELECT pg_proc.proname AS function_name,pg_trigger.tgname AS trigger_name,pg_namespace.nspname AS schema_name FROM pg_trigger LEFT JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid LEFT JOIN pg_proc ON pg_trigger.tgfoid = pg_proc.oid LEFT JOIN pg_namespace ON pg_proc.pronamespace = pg_namespace.oid WHERE pg_class.relname = '{}' AND NOT pg_proc.proname LIKE 'RI_FKey_%' ".format(table))
