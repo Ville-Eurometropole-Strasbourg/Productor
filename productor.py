@@ -14,6 +14,21 @@ sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\include\\python')
 import sqlalchemy as db
 import psycopg2
 
+class RestoreTask(QgsTask):
+    def __init__(self, pg_string, password):
+        super().__init__('Dumping table')
+        self.pg_string = pg_string
+        self.password = password     
+    def run(self):
+        os.environ['PGPASSWORD'] = self.password
+        try:
+            process = os.popen(self.pg_string)
+            process.close()
+            return True
+        except Exception as e:
+            QgsMessageLog.logMessage(str(e), 'Productor', level=Qgis.Critical)
+            return False
+        
 class DumpTask(QgsTask):
     def __init__(self, pg_string):
         super().__init__('Dumping table')
@@ -97,9 +112,11 @@ class Productor:
         self.dlg.pushButton.clicked.connect(self.dump)
         self.dlg.pushButton_2.clicked.connect(self.closeEvent)
         self.dlg.pushButton_3.clicked.connect(self.connection)
+        self.dlg.pushButton_4.clicked.connect(self.restore)
         self.dlg.checkBox_2.stateChanged.connect(self.checkBox_2_state_changed)
         self.dlg.checkBox.stateChanged.connect(self.checkBox_state_changed)
         self.dlg.toolButton.clicked.connect(self.choose)
+        self.dlg.toolButton_2.clicked.connect(self.choose_2)
         self.dlg.comboBox_3.activated.connect(self.table)
         self.dlg.show()
         self.dlg.closeEvent = self.closeEvent
@@ -118,12 +135,54 @@ class Productor:
         self.dlg.comboBox_2.clear()
         self.dlg.comboBox_2.addItems(sorted(tables))
 
+    def restore(self):
+        pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_restore.exe"
+        pg_path = pg_path.replace('/', '\\')
+        database = self.dlg.lineEdit_4.text()
+        password = self.dlg.lineEdit_5.text()
+        folder = self.folder_path_import
+        files = os.listdir(folder)
+        conn_string = 'postgresql://{}:{}@bdsigli.cus.fr:34000/{}'.format(database, password, database)
+        conn = psycopg2.connect(conn_string)
+        cur = conn.cursor()
+        for file in files:
+            name, ext = os.path.splitext(file)
+            if file == "enums.sql":
+                with open('{}\\enums.sql'.format(folder), 'r', encoding="cp1252") as f:
+                    lines = f.readlines()
+                sql_lines = []
+                for line in lines:
+                    line = line.strip()
+                    if line.startswith('--') or line.startswith('#'):
+                        continue
+                    if not line:
+                        continue
+                    if line.startswith('CREATE') or line.startswith('ALTER') or line.startswith('DROP'):
+                        sql_lines.append(line)
+            for sql_line in sql_lines:
+                try:
+                    cur.execute(sql_line)
+                except psycopg2.errors.DuplicateObject :
+                    conn.rollback()
+            conn.commit()
+
+            if file == "fonctions.sql":
+                pass
+
+            """
+            if ext == ".backup":
+                pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --section=pre-data --section=data --section=post-data --verbose --dbname "{}" "{}\{}" '.format(pg_path, database, database, folder, file)
+                self.iface.messageBar().pushMessage(str(file))
+                task = RestoreTask(pg_string, self.dlg.lineEdit_5.text())
+                QgsApplication.taskManager().addTask(task)
+                while QgsApplication.taskManager().count() > 0:
+                    QCoreApplication.processEvents()
+            """
+        cur.close()
+        conn.close()
     def dump(self) :
         try :
-            enum_list = []
-            enum_drop_list = []
             cst_val = []
-            cst_val_drop = []
             pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
             pg_path = pg_path.replace('/', '\\')
             database = self.dlg.lineEdit_2.text()
@@ -145,7 +204,7 @@ class Productor:
             for nb, table in enumerate(tables) :
                 progress = int((nb + 1) * 100 / total)
                 if self.dlg.checkBox.isChecked():
-                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --verbose --encoding {} --table {}.{} {} > "{}\{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
+                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --encoding {} --table {}.{} {} > "{}\{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
                 else:
                     pg_string = r'{} --host {} --port 34000 --format=p --schema-only --no-owner --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, table)
                 task = DumpTask(pg_string)
@@ -167,14 +226,14 @@ class Productor:
                     val = self.cur.fetchone()[0]
                     cst_val.append(str(val))
                 cst_val = list(dict.fromkeys(cst_val))
-                file_object = open('{}\\enums.sql'.format(folder), 'a', encoding="cp1252")
+                file_object = open('{}\\enums.sql'.format(folder), 'w', encoding="cp1252")
                 if file_object.tell() == 0 :
                     file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                     file_object.write('--Création des Enumérations\n')
                 for valeur in cst_val :
                     file_object.write('{}\n'.format(str(valeur)))
                 file_object.close()
-                # Functions
+                # FUNCTIONS
                 self.cur.execute("SELECT pg_proc.proname AS function_name,pg_trigger.tgname AS trigger_name,pg_namespace.nspname AS schema_name FROM pg_trigger LEFT JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid LEFT JOIN pg_proc ON pg_trigger.tgfoid = pg_proc.oid LEFT JOIN pg_namespace ON pg_proc.pronamespace = pg_namespace.oid WHERE pg_class.relname = '{}' AND NOT pg_proc.proname LIKE 'RI_FKey_%' ".format(table))
                 result_table_functions = self.cur.fetchall()
                 table_list_functions = []
@@ -204,6 +263,12 @@ class Productor:
         self.folder_path = self.folder_path.replace('/', '\\')
         if self.folder_path:
             self.dlg.lineEdit.setText(self.folder_path)
+    
+    def choose_2(self):
+        self.folder_path_import = QFileDialog.getExistingDirectory(self.dlg, 'Select Folder')
+        self.folder_path_import = self.folder_path_import.replace('/', '\\')
+        if self.folder_path_import:
+            self.dlg.lineEdit_3.setText(self.folder_path_import)
 
     def connection(self) : 
         if self.dlg.lineEdit_2.text() != 'sigli' : 
@@ -237,4 +302,3 @@ class Productor:
             pass
         self.dlg.progressBar.setValue(0)
         self.dlg.close()
-
