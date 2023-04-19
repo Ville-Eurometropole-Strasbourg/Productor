@@ -1,7 +1,6 @@
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFileDialog, QErrorMessage
 from qgis.core import QgsTask, QgsMessageLog, QgsApplication, Qgis
-from qgis.gui import QgsMessageBar
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import QAction
@@ -11,23 +10,29 @@ import os.path
 import os
 import sys
 sys.path.append(os.path.join(os.path.dirname(__file__)) + '\\include\\python')
-import sqlalchemy as db
 import psycopg2
+
+import subprocess
 
 class RestoreTask(QgsTask):
     def __init__(self, pg_string, password):
-        super().__init__('Dumping table')
+        super().__init__('Restoring backup')
         self.pg_string = pg_string
         self.password = password     
+
     def run(self):
         os.environ['PGPASSWORD'] = self.password
         try:
-            process = os.popen(self.pg_string)
-            process.close()
+            process = subprocess.Popen(self.pg_string, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+            stdout, stderr = process.communicate()
+            output = stdout.decode('utf-8') + stderr.decode('utf-8')
+            process.wait()
+            QgsMessageLog.logMessage(output, 'Productor', level=Qgis.Info)
             return True
         except Exception as e:
             QgsMessageLog.logMessage(str(e), 'Productor', level=Qgis.Critical)
             return False
+
         
 class DumpTask(QgsTask):
     def __init__(self, pg_string):
@@ -129,12 +134,30 @@ class Productor:
         if state == Qt.Checked:
             self.dlg.checkBox_2.setChecked(False)
 
-    def table(self) :
-        self.schema = self.dlg.comboBox_3.currentText()
-        tables = self.insp.get_table_names(schema = self.schema)
-        self.dlg.comboBox_2.clear()
-        self.dlg.comboBox_2.addItems(sorted(tables))
-
+    def table(self):
+        if self.dlg.lineEdit_2.text() != 'sigli':
+            conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
+        else:
+            conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
+        try:
+            conn = psycopg2.connect(conn_string)
+            cur = conn.cursor()
+            self.schema = self.dlg.comboBox_3.currentText()
+            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_type = 'BASE TABLE';", (self.schema,))
+            tables = [row[0] for row in cur.fetchall()]
+            cur.execute("SELECT table_name FROM information_schema.views WHERE table_schema = %s;", (self.schema,))
+            self.views = [row[0] for row in cur.fetchall()]
+            self.dlg.comboBox_2.clear()
+            self.dlg.comboBox_2.addItems(sorted(tables + self.views))
+            self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
+        except psycopg2.Error as err:
+            self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
+            self.error_dialog = QErrorMessage()
+            self.error_dialog.showMessage('Erreur de Connection' + ':' + str(err))
+        finally:
+            cur.close() if cur else None
+            conn.close() if conn else None
+  
     def restore(self):
         pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_restore.exe"
         pg_path = pg_path.replace('/', '\\')
@@ -145,10 +168,11 @@ class Productor:
         conn_string = 'postgresql://{}:{}@bdsigli.cus.fr:34000/{}'.format(database, password, database)
         conn = psycopg2.connect(conn_string)
         cur = conn.cursor()
+        first_pass =  0 
         for file in files:
             name, ext = os.path.splitext(file)
-            if file == "enums.sql":
-                with open('{}\\enums.sql'.format(folder), 'r', encoding="cp1252") as f:
+            if file == "1_enums.sql" and first_pass == 0:
+                with open('{}\\1_enums.sql'.format(folder), 'r', encoding="cp1252") as f:
                     lines = f.readlines()
                 sql_lines = []
                 for line in lines:
@@ -164,24 +188,51 @@ class Productor:
                     cur.execute(sql_line)
                 except psycopg2.errors.DuplicateObject :
                     conn.rollback()
-            conn.commit()
+                conn.commit()
 
-            if file == "fonctions.sql":
-                pass
+            if file == "2_fonctions.sql" and first_pass == 0:
+                with open('{}\\2_fonctions.sql'.format(folder), 'r', encoding="cp1252") as f:
+                    sql = f.read()
+                    functions = sql.split("$function$;\n")
+                    for i in range(len(functions) - 1):
+                        function = functions[i]
+                        if function.strip() == "":
+                            continue
+                        try:
+                            cur.execute(function + "$function$;")
+                        except psycopg2.errors.DuplicateObject:
+                            conn.rollback()
+                        conn.commit()
+                    last_function = functions[-1]
+                    if last_function.strip() != "":
+                        try:
+                            cur.execute(last_function)
+                        except psycopg2.errors.DuplicateObject:
+                            conn.rollback()
+                        conn.commit()              
 
-            """
             if ext == ".backup":
-                pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --section=pre-data --section=data --section=post-data --verbose --dbname "{}" "{}\{}" '.format(pg_path, database, database, folder, file)
-                self.iface.messageBar().pushMessage(str(file))
+                pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --section=pre-data --section=data --section=post-data --dbname "{}" "{}\{}" '.format(pg_path, database, database, folder, file)
                 task = RestoreTask(pg_string, self.dlg.lineEdit_5.text())
                 QgsApplication.taskManager().addTask(task)
                 while QgsApplication.taskManager().count() > 0:
                     QCoreApplication.processEvents()
-            """
+            
+            first_pass = 1
+
         cur.close()
         conn.close()
+        
     def dump(self) :
         try :
+            if self.dlg.lineEdit_2.text() != 'sigli' : 
+                conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
+            else :
+                conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
+            conn = psycopg2.connect(conn_string)
+            cur = conn.cursor()
+            written_functions = []
+            written_enums = []
             cst_val = []
             pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
             pg_path = pg_path.replace('/', '\\')
@@ -204,58 +255,66 @@ class Productor:
             for nb, table in enumerate(tables) :
                 progress = int((nb + 1) * 100 / total)
                 if self.dlg.checkBox.isChecked():
-                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --encoding {} --table {}.{} {} > "{}\{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
+                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --encoding {} --table {}.{} {} > "{}\3_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
                 else:
-                    pg_string = r'{} --host {} --port 34000 --format=p --schema-only --no-owner --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, table)
+                    pg_string = r'{} --host {} --port 34000 --format=p --schema-only --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\3_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, table)
                 task = DumpTask(pg_string)
                 QgsApplication.taskManager().addTask(task)
                 while QgsApplication.taskManager().count() > 0:
                     QCoreApplication.processEvents()
                 if self.dlg.checkBox_2.isChecked():
-                    file_object = open('{}\{}.sql'.format(folder, table), 'r+', encoding="cp1252")
+                    file_object = open(r'{}\3_{}.sql'.format(folder, table), 'r+', encoding="cp1252")
                     content = file_object.read()
                     file_object.seek(0,0)
                     file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
                     file_object.close()
                 # ENUMS
-                self.cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
-                columns_table = self.cur.fetchall()
+                cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
+                columns_table = cur.fetchall()
                 for c in columns_table:
                     column_type = c[1]  
-                    self.cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum WHERE enumtypid::regtype = '{}'::regtype GROUP BY enumtypid;".format(column_type))
-                    val = self.cur.fetchone()[0]
+                    cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum WHERE enumtypid::regtype = '{}'::regtype GROUP BY enumtypid;".format(column_type))
+                    val = cur.fetchone()[0]
                     cst_val.append(str(val))
                 cst_val = list(dict.fromkeys(cst_val))
-                file_object = open('{}\\enums.sql'.format(folder), 'w', encoding="cp1252")
+                file_object = open('{}\\1_enums.sql'.format(folder), 'a', encoding="cp1252")
                 if file_object.tell() == 0 :
                     file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                     file_object.write('--Création des Enumérations\n')
                 for valeur in cst_val :
-                    file_object.write('{}\n'.format(str(valeur)))
+                    if valeur not in written_enums:
+                        file_object.write('{}\n'.format(str(valeur)))
+                        written_enums.append((str(valeur)))
                 file_object.close()
                 # FUNCTIONS
-                self.cur.execute("SELECT pg_proc.proname AS function_name,pg_trigger.tgname AS trigger_name,pg_namespace.nspname AS schema_name FROM pg_trigger LEFT JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid LEFT JOIN pg_proc ON pg_trigger.tgfoid = pg_proc.oid LEFT JOIN pg_namespace ON pg_proc.pronamespace = pg_namespace.oid WHERE pg_class.relname = '{}' AND NOT pg_proc.proname LIKE 'RI_FKey_%' ".format(table))
-                result_table_functions = self.cur.fetchall()
+                cur.execute("SELECT pg_proc.proname AS function_name,pg_trigger.tgname AS trigger_name,pg_namespace.nspname AS schema_name FROM pg_trigger LEFT JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid LEFT JOIN pg_proc ON pg_trigger.tgfoid = pg_proc.oid LEFT JOIN pg_namespace ON pg_proc.pronamespace = pg_namespace.oid WHERE pg_class.relname = '{}' AND NOT pg_proc.proname LIKE 'RI_FKey_%' ".format(table))
+                result_table_functions = cur.fetchall()
                 table_list_functions = []
                 for row in result_table_functions:
                     schema_table = row[2] + '.' + row[0]
                     table_list_functions.append(schema_table)
-                file_object = open('{}\\fonctions.sql'.format(folder), 'a', encoding="cp1252")
+                file_object = open('{}\\2_fonctions.sql'.format(folder), 'a', encoding="cp1252")
                 if file_object.tell() == 0 :
                     file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
                     file_object.write('--Création des Fonctions\n')
                 for table in table_list_functions:
-                    self.cur.execute("SELECT pg_get_functiondef('{}'::regproc)".format(table))
-                    function = self.cur.fetchone()
-                    file_object.write('{};\n'.format(function[0]))
+                    cur.execute("SELECT pg_get_functiondef('{}'::regproc)".format(table))
+                    function = cur.fetchone()
+                    if function[0] not in written_functions:
+                        file_object.write('{};\n'.format(function[0]))
+                        written_functions.append(function[0])
                 file_object.close()
                 progress = int((nb + 1) * 100 / total)
                 self.dlg.progressBar.setValue(progress)
             self.dlg.progressBar.setValue(0)
+            cur.close() 
+            conn.close() 
         except Exception as e : 
             self.error_dialog = QErrorMessage()
             self.error_dialog.showMessage(str(e))
             self.dlg.progressBar.setValue(0)
+            cur.close() 
+            conn.close() 
             pass 
     
     def choose(self):
@@ -276,20 +335,24 @@ class Productor:
         else :
             conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
         try :
-            engine = db.create_engine(conn_string)
-            self.insp = db.inspect(engine)
-            list = self.insp.get_schema_names()
             conn = psycopg2.connect(conn_string)
-            self.cur = conn.cursor()
+            cur = conn.cursor()
+            cur.execute("SELECT schema_name FROM information_schema.schemata WHERE schema_name !~ '^(pg_|information_schema)';")
+            rows = cur.fetchall()
+            list = [row[0] for row in rows]
             self.dlg.comboBox_2.clear()
             self.dlg.comboBox_3.clear()
             self.dlg.comboBox_3.addItems(list)
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
-        except db.exc.SQLAlchemyError as err :
+        except Exception as err :
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
             self.error_dialog = QErrorMessage()
             self.error_dialog.showMessage('Erreur de Connection' + ':' + str(err))
-    
+            cur.close()
+            conn.close()
+        cur.close() if cur and not cur.closed else None
+        conn.close() if conn and not conn.closed else None
+
     def closeEvent(self, event):
         self.dlg.comboBox_2.clear()
         self.dlg.comboBox_3.clear()
