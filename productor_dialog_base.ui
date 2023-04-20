@@ -211,7 +211,7 @@
          <item>
           <widget class="QCheckBox" name="checkBox_3">
            <property name="text">
-            <string>Import avec les données</string>
+            <string>Nettoyer les tables avant import</string>
            </property>
           </widget>
          </item>
@@ -227,6 +227,20 @@
             </size>
            </property>
           </spacer>
+         </item>
+         <item>
+          <widget class="Line" name="line_2">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QProgressBar" name="progressBar_2">
+           <property name="value">
+            <number>0</number>
+           </property>
+          </widget>
          </item>
          <item>
           <widget class="QPushButton" name="pushButton_4">

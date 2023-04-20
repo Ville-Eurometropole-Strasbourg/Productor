@@ -32,8 +32,7 @@ class RestoreTask(QgsTask):
         except Exception as e:
             QgsMessageLog.logMessage(str(e), 'Productor', level=Qgis.Critical)
             return False
-
-        
+       
 class DumpTask(QgsTask):
     def __init__(self, pg_string):
         super().__init__('Dumping table')
@@ -160,70 +159,132 @@ class Productor:
             conn.close() if conn else None
         
     def restore(self):
-        pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_restore.exe"
-        pg_path = pg_path.replace('/', '\\')
-        database = self.dlg.lineEdit_4.text()
-        password = self.dlg.lineEdit_5.text()
-        folder = self.folder_path_import
-        files = os.listdir(folder)
-        conn_string = 'postgresql://{}:{}@bdsigli.cus.fr:34000/{}'.format(database, password, database)
-        conn = psycopg2.connect(conn_string)
-        cur = conn.cursor()
-        first_pass =  0 
-        for file in files:
-            name, ext = os.path.splitext(file)
-            if file == "1_enums.sql" and first_pass == 0:
-                with open('{}\\1_enums.sql'.format(folder), 'r', encoding="cp1252") as f:
-                    lines = f.readlines()
-                sql_lines = []
-                for line in lines:
-                    line = line.strip()
-                    if line.startswith('--') or line.startswith('#'):
-                        continue
-                    if not line:
-                        continue
-                    if line.startswith('CREATE') or line.startswith('ALTER') or line.startswith('DROP'):
-                        sql_lines.append(line)
-            for sql_line in sql_lines:
-                try:
-                    cur.execute(sql_line)
-                except psycopg2.errors.DuplicateObject :
-                    conn.rollback()
-                conn.commit()
-
-            if file == "2_fonctions.sql" and first_pass == 0:
-                with open('{}\\2_fonctions.sql'.format(folder), 'r', encoding="cp1252") as f:
-                    sql = f.read()
-                    functions = sql.split("$function$;\n")
-                    for i in range(len(functions) - 1):
-                        function = functions[i]
-                        if function.strip() == "":
+        try :
+            pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_restore.exe"
+            pg_path = pg_path.replace('/', '\\')
+            database = self.dlg.lineEdit_4.text()
+            password = self.dlg.lineEdit_5.text()
+            conn_string = 'postgresql://{}:{}@bdsigli.cus.fr:34000/{}'.format(database, password, database)
+            conn = psycopg2.connect(conn_string)
+            cur = conn.cursor()
+            folder = self.folder_path_import
+            files = os.listdir(folder)
+            first_pass =  0
+            for file in files:
+                name, ext = os.path.splitext(file)
+                if file == "1_enums.sql" and first_pass == 0:
+                    with open('{}\\1_enums.sql'.format(folder), 'r', encoding="cp1252") as f:
+                        lines = f.readlines()
+                    sql_lines = []
+                    for line in lines:
+                        line = line.strip()
+                        if line.startswith('--') or line.startswith('#'):
                             continue
-                        try:
-                            cur.execute(function + "$function$;")
-                        except psycopg2.errors.DuplicateObject:
-                            conn.rollback()
-                        conn.commit()
-                    last_function = functions[-1]
-                    if last_function.strip() != "":
-                        try:
-                            cur.execute(last_function)
-                        except psycopg2.errors.DuplicateObject:
-                            conn.rollback()
-                        conn.commit()              
+                        if not line:
+                            continue
+                        if line.startswith('CREATE') or line.startswith('ALTER') or line.startswith('DROP'):
+                            sql_lines.append(line)
+                for sql_line in sql_lines:
+                    try:
+                        cur.execute(sql_line)
+                    except psycopg2.errors.DuplicateObject :
+                        conn.rollback()
+                    conn.commit()
 
-            if ext == ".backup":
-                pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --section=pre-data --section=data --section=post-data --dbname "{}" "{}\{}" '.format(pg_path, database, database, folder, file)
-                task = RestoreTask(pg_string, self.dlg.lineEdit_5.text())
-                QgsApplication.taskManager().addTask(task)
-                while QgsApplication.taskManager().count() > 0:
-                    QCoreApplication.processEvents()
-            
-            first_pass = 1
+                if file == "2_fonctions.sql" and first_pass == 0:
+                    with open('{}\\2_fonctions.sql'.format(folder), 'r', encoding="cp1252") as f:
+                        sql = f.read()
+                        functions = sql.split("$function$;\n")
+                        for i in range(len(functions) - 1):
+                            function = functions[i]
+                            if function.strip() == "":
+                                continue
+                            try:
+                                cur.execute(function + "$function$;")
+                            except psycopg2.errors.DuplicateObject:
+                                conn.rollback()
+                            conn.commit()
+                        last_function = functions[-1]
+                        if last_function.strip() != "":
+                            try:
+                                cur.execute(last_function)
+                            except psycopg2.errors.DuplicateObject:
+                                conn.rollback()
+                            conn.commit()              
 
-        cur.close()
-        conn.close()
-         
+                if ext == ".backup":
+                    pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --section=pre-data --section=data --section=post-data --dbname "{}" "{}\{}" '.format(pg_path, database, database, folder, file)
+                    task = RestoreTask(pg_string, self.dlg.lineEdit_5.text())
+                    QgsApplication.taskManager().addTask(task)
+                    while QgsApplication.taskManager().count() > 0:
+                        QCoreApplication.processEvents()
+                
+                first_pass = 1
+        except Exception as e : 
+            self.error_dialog = QErrorMessage()
+            self.error_dialog.showMessage(str(e))
+            self.dlg.progressBar_2.setValue(0)
+            pass 
+
+        cur.close() if cur is not None else None
+        conn.close() if conn is not None else None
+
+    def dumper(self, cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val):
+        pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
+        pg_path = pg_path.replace('/', '\\')
+        if self.dlg.checkBox.isChecked():
+            pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\{}_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
+        else:
+            pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\{}_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
+        task = DumpTask(pg_string)
+        QgsApplication.taskManager().addTask(task)
+        while QgsApplication.taskManager().count() > 0:
+            QCoreApplication.processEvents()
+        if self.dlg.checkBox_2.isChecked():
+            file_object = open(r'{}\{}_{}.sql'.format(folder, dump_nbr, table), 'r+', encoding="cp1252")
+            content = file_object.read()
+            file_object.seek(0,0)
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
+            file_object.close()
+        # ENUMS
+        cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
+        columns_table = cur.fetchall()
+        for c in columns_table:
+            column_type = c[1]  
+            cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum WHERE enumtypid::regtype = '{}'::regtype GROUP BY enumtypid;".format(column_type))
+            val = cur.fetchone()[0]
+            cst_val.append(str(val))
+        cst_val = list(dict.fromkeys(cst_val))
+        file_object = open('{}\\1_enums.sql'.format(folder), 'a', encoding="cp1252")
+        if file_object.tell() == 0 :
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
+            file_object.write('--Création des Enumérations\n')
+        for valeur in cst_val :
+            if valeur not in self.written_enums:
+                file_object.write('{}\n'.format(str(valeur)))
+                self.written_enums.append((str(valeur)))
+        file_object.close()
+        # FUNCTIONS
+        cur.execute("SELECT pg_proc.proname AS function_name,pg_trigger.tgname AS trigger_name,pg_namespace.nspname AS schema_name FROM pg_trigger LEFT JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid LEFT JOIN pg_proc ON pg_trigger.tgfoid = pg_proc.oid LEFT JOIN pg_namespace ON pg_proc.pronamespace = pg_namespace.oid WHERE pg_class.relname = '{}' AND NOT pg_proc.proname LIKE 'RI_FKey_%' ".format(table))
+        result_table_functions = cur.fetchall()
+        table_list_functions = []
+        for row in result_table_functions:
+            schema_table = row[2] + '.' + row[0]
+            table_list_functions.append(schema_table)
+        file_object = open('{}\\2_fonctions.sql'.format(folder), 'a', encoding="cp1252")
+        if file_object.tell() == 0 :
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
+            file_object.write('--Création des Fonctions\n')
+        for table in table_list_functions:
+            cur.execute("SELECT pg_get_functiondef('{}'::regproc)".format(table))
+            function = cur.fetchone()
+            if function[0] not in self.written_functions:
+                file_object.write('{};\n'.format(function[0]))
+                self.written_functions.append(function[0])
+        file_object.close()
+        progress = int((nb + 1) * 100 / total)
+        self.dlg.progressBar.setValue(progress) 
+
     def dump(self) :
         try :
             if self.dlg.lineEdit_2.text() != 'sigli' : 
@@ -232,11 +293,9 @@ class Productor:
                 conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_2.text())
             conn = psycopg2.connect(conn_string)
             cur = conn.cursor()
-            written_functions = []
-            written_enums = []
+            self.written_functions = []
+            self.written_enums = []
             cst_val = []
-            pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
-            pg_path = pg_path.replace('/', '\\')
             database = self.dlg.lineEdit_2.text()
             schema = self.dlg.comboBox_3.currentText()
             tables = [item.text() for item in self.dlg.comboBox_2.selectedItems()]
@@ -274,60 +333,14 @@ class Productor:
                                     pg_rewrite.ev_class = '{}.{}'::regclass
                                                             """.format(schema, table) )
                         view_tables= {row[0] for row in cur.fetchall()}
-                        for test in view_tables : 
-                            self.iface.messageBar().pushMessage(str(test), level=Qgis.Critical, duration=3)
-                if self.dlg.checkBox.isChecked():
-                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\3_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
-                else:
-                    pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\3_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, table)
-                task = DumpTask(pg_string)
-                QgsApplication.taskManager().addTask(task)
-                while QgsApplication.taskManager().count() > 0:
-                    QCoreApplication.processEvents()
-                if self.dlg.checkBox_2.isChecked():
-                    file_object = open(r'{}\3_{}.sql'.format(folder, table), 'r+', encoding="cp1252")
-                    content = file_object.read()
-                    file_object.seek(0,0)
-                    file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
-                    file_object.close()
-                # ENUMS
-                cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
-                columns_table = cur.fetchall()
-                for c in columns_table:
-                    column_type = c[1]  
-                    cur.execute("SELECT format( 'CREATE TYPE %s AS ENUM (%s);', enumtypid::regtype, string_agg(quote_literal(enumlabel), ', ') ) FROM pg_enum WHERE enumtypid::regtype = '{}'::regtype GROUP BY enumtypid;".format(column_type))
-                    val = cur.fetchone()[0]
-                    cst_val.append(str(val))
-                cst_val = list(dict.fromkeys(cst_val))
-                file_object = open('{}\\1_enums.sql'.format(folder), 'a', encoding="cp1252")
-                if file_object.tell() == 0 :
-                    file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
-                    file_object.write('--Création des Enumérations\n')
-                for valeur in cst_val :
-                    if valeur not in written_enums:
-                        file_object.write('{}\n'.format(str(valeur)))
-                        written_enums.append((str(valeur)))
-                file_object.close()
-                # FUNCTIONS
-                cur.execute("SELECT pg_proc.proname AS function_name,pg_trigger.tgname AS trigger_name,pg_namespace.nspname AS schema_name FROM pg_trigger LEFT JOIN pg_class ON pg_trigger.tgrelid = pg_class.oid LEFT JOIN pg_proc ON pg_trigger.tgfoid = pg_proc.oid LEFT JOIN pg_namespace ON pg_proc.pronamespace = pg_namespace.oid WHERE pg_class.relname = '{}' AND NOT pg_proc.proname LIKE 'RI_FKey_%' ".format(table))
-                result_table_functions = cur.fetchall()
-                table_list_functions = []
-                for row in result_table_functions:
-                    schema_table = row[2] + '.' + row[0]
-                    table_list_functions.append(schema_table)
-                file_object = open('{}\\2_fonctions.sql'.format(folder), 'a', encoding="cp1252")
-                if file_object.tell() == 0 :
-                    file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
-                    file_object.write('--Création des Fonctions\n')
-                for table in table_list_functions:
-                    cur.execute("SELECT pg_get_functiondef('{}'::regproc)".format(table))
-                    function = cur.fetchone()
-                    if function[0] not in written_functions:
-                        file_object.write('{};\n'.format(function[0]))
-                        written_functions.append(function[0])
-                file_object.close()
-                progress = int((nb + 1) * 100 / total)
-                self.dlg.progressBar.setValue(progress)
+                        for view_table in view_tables : 
+                            schema_view, table_view = view_table.split('.')
+                            dump_nbr = "3"
+                            self.dumper(cur, url, encoding, schema_view, table_view, database, folder, dump_nbr, nb, total, cst_val)
+                        dump_nbr = "4"
+                    else : 
+                        dump_nbr = "3"
+                self.dumper(cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val)
             self.dlg.progressBar.setValue(0)
             cur.close() 
             conn.close() 
