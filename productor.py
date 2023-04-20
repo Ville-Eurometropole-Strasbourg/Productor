@@ -40,8 +40,11 @@ class DumpTask(QgsTask):
         self.pg_string = pg_string
     def run(self):
         try:
-            process = os.popen(self.pg_string)
-            process.close()
+            process = subprocess.Popen(self.pg_string, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
+            stdout, stderr = process.communicate()
+            output = stdout.decode('utf-8') + stderr.decode('utf-8')
+            process.wait()
+            QgsMessageLog.logMessage(output, 'Productor', level=Qgis.Info)
             return True
         except Exception as e:
             QgsMessageLog.logMessage(str(e), 'Productor', level=Qgis.Critical)
@@ -143,12 +146,10 @@ class Productor:
             conn = psycopg2.connect(conn_string)
             cur = conn.cursor()
             self.schema = self.dlg.comboBox_3.currentText()
-            cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_type = 'BASE TABLE';", (self.schema,))
-            tables = [row[0] for row in cur.fetchall()]
-            cur.execute("SELECT table_name FROM information_schema.views WHERE table_schema = %s;", (self.schema,))
-            self.views = [row[0] for row in cur.fetchall()]
+            cur.execute("SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = %s;", (self.schema,))
+            self.tables = {row[0]: row[1] for row in cur.fetchall()}
             self.dlg.comboBox_2.clear()
-            self.dlg.comboBox_2.addItems(sorted(tables + self.views))
+            self.dlg.comboBox_2.addItems(sorted(self.tables.keys()))
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
         except psycopg2.Error as err:
             self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
@@ -157,7 +158,7 @@ class Productor:
         finally:
             cur.close() if cur else None
             conn.close() if conn else None
-  
+        
     def restore(self):
         pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_restore.exe"
         pg_path = pg_path.replace('/', '\\')
@@ -222,7 +223,7 @@ class Productor:
 
         cur.close()
         conn.close()
-        
+         
     def dump(self) :
         try :
             if self.dlg.lineEdit_2.text() != 'sigli' : 
@@ -254,10 +255,31 @@ class Productor:
             self.dlg.progressBar.setValue(progress)
             for nb, table in enumerate(tables) :
                 progress = int((nb + 1) * 100 / total)
+                if table in self.tables:
+                    if self.tables[table] == 'VIEW':
+                        cur.execute(
+                                    """
+                                    SELECT DISTINCT
+                                    pg_class.oid::regclass::text as table_name
+                                    FROM pg_rewrite
+                                    JOIN pg_depend ON
+                                    pg_depend.classid = 'pg_rewrite'::regclass AND
+                                    pg_depend.objid = pg_rewrite.oid AND
+                                    pg_depend.refclassid = 'pg_class'::regclass AND
+                                    pg_depend.refobjid <> pg_rewrite.ev_class
+                                    JOIN pg_class ON
+                                    pg_class.oid = pg_depend.refobjid AND
+                                    pg_class.relkind IN ('r','f','p','v','m')
+                                    WHERE
+                                    pg_rewrite.ev_class = '{}.{}'::regclass
+                                                            """.format(schema, table) )
+                        view_tables= {row[0] for row in cur.fetchall()}
+                        for test in view_tables : 
+                            self.iface.messageBar().pushMessage(str(test), level=Qgis.Critical, duration=3)
                 if self.dlg.checkBox.isChecked():
-                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --encoding {} --table {}.{} {} > "{}\3_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
+                    pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\3_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, table)
                 else:
-                    pg_string = r'{} --host {} --port 34000 --format=p --schema-only --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\3_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, table)
+                    pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\3_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, table)
                 task = DumpTask(pg_string)
                 QgsApplication.taskManager().addTask(task)
                 while QgsApplication.taskManager().count() > 0:
