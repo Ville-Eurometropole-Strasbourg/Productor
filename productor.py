@@ -1,5 +1,5 @@
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFileDialog, QErrorMessage
+from PyQt5.QtWidgets import QFileDialog, QErrorMessage, QListWidgetItem, QAbstractItemView
 from qgis.core import QgsTask, QgsMessageLog, QgsApplication, Qgis
 from qgis.PyQt.QtCore import QSettings, QTranslator, QCoreApplication
 from qgis.PyQt.QtGui import QIcon
@@ -116,25 +116,23 @@ class Productor:
         if self.first_start == True:
             self.first_start = False
             self.dlg = ProductorDialog()
+        self.dlg.listWidget.setDragEnabled(True)
+        self.dlg.listWidget.setAcceptDrops(True)
+        self.dlg.listWidget.setDropIndicatorShown(True)
+        self.dlg.listWidget.setDragDropMode(QAbstractItemView.InternalMove)
         self.dlg.pushButton.clicked.connect(self.dump)
         self.dlg.pushButton_2.clicked.connect(self.closeEvent)
         self.dlg.pushButton_3.clicked.connect(self.connection)
         self.dlg.pushButton_4.clicked.connect(self.restore)
-        self.dlg.checkBox_2.stateChanged.connect(self.checkBox_2_state_changed)
-        self.dlg.checkBox.stateChanged.connect(self.checkBox_state_changed)
         self.dlg.toolButton.clicked.connect(self.choose)
         self.dlg.toolButton_2.clicked.connect(self.choose_2)
         self.dlg.comboBox_3.activated.connect(self.table)
+        self.dlg.toolButton_3.clicked.connect(self.choose_3)
+        self.dlg.pushButton_5.clicked.connect(self.connection_2)
+        self.dlg.comboBox.activated.connect(self.enum_fill_table)
+        self.dlg.pushButton_6.clicked.connect(self.enumerations)
         self.dlg.show()
         self.dlg.closeEvent = self.closeEvent
-
-    def checkBox_2_state_changed(self, state):
-        if state == Qt.Checked:
-            self.dlg.checkBox.setChecked(False)
-
-    def checkBox_state_changed(self, state):
-        if state == Qt.Checked:
-            self.dlg.checkBox_2.setChecked(False)
 
     def table(self):
         if self.dlg.lineEdit_2.text() != 'sigli':
@@ -149,11 +147,9 @@ class Productor:
             self.tables = {row[0]: row[1] for row in cur.fetchall()}
             self.dlg.comboBox_2.clear()
             self.dlg.comboBox_2.addItems(sorted(self.tables.keys()))
-            self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
         except psycopg2.Error as err:
-            self.dlg.lineEdit_2.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
             self.error_dialog = QErrorMessage()
-            self.error_dialog.showMessage('Erreur de Connection' + ':' + str(err))
+            self.error_dialog.showMessage('Erreur de chargement des tables' + ':' + str(err))
         finally:
             cur.close() if cur else None
             conn.close() if conn else None
@@ -190,62 +186,66 @@ class Productor:
                     except psycopg2.errors.DuplicateObject :
                         conn.rollback()
                     conn.commit()
-
                 if file == "2_fonctions.sql" and first_pass == 0:
                     with open('{}\\2_fonctions.sql'.format(folder), 'r', encoding="cp1252") as f:
                         sql = f.read()
-                        functions = sql.split("$function$;\n")
-                        for i in range(len(functions) - 1):
-                            function = functions[i]
-                            if function.strip() == "":
-                                continue
-                            try:
-                                cur.execute(function + "$function$;")
-                            except psycopg2.errors.DuplicateObject:
-                                conn.rollback()
-                            conn.commit()
-                        last_function = functions[-1]
-                        if last_function.strip() != "":
-                            try:
-                                cur.execute(last_function)
-                            except psycopg2.errors.DuplicateObject:
-                                conn.rollback()
-                            conn.commit()              
-
+                        try:
+                            cur.execute(sql)
+                        except psycopg2.errors.DuplicateObject:
+                            conn.rollback()
+                        conn.commit() 
+            files = os.listdir(folder + '\\structures')                   
+            for file in files:
+                name, ext = os.path.splitext(file)
+                if ext == ".sql":
+                    with open('{}\\structures\\{}'.format(folder, file), 'r', encoding="cp1252") as f:
+                        sql = f.read()
+                        try:
+                            cur.execute(sql)
+                        except Exception:
+                            conn.rollback()
+                        conn.commit() 
+            files = os.listdir(folder + '\\données')                   
+            for file in files:
+                name, ext = os.path.splitext(file)
                 if ext == ".backup":
-                    pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --section=pre-data --section=data --section=post-data --dbname "{}" "{}\{}" '.format(pg_path, database, database, folder, file)
+                    pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --data-only  --dbname "{}" "{}\\données\\{}" '.format(pg_path, database, database, folder, file)
                     task = RestoreTask(pg_string, self.dlg.lineEdit_5.text())
                     QgsApplication.taskManager().addTask(task)
                     while QgsApplication.taskManager().count() > 0:
-                        QCoreApplication.processEvents()
-                
+                        QCoreApplication.processEvents()  
                 first_pass = 1
         except Exception as e : 
             self.error_dialog = QErrorMessage()
+            
             self.error_dialog.showMessage(str(e))
             self.dlg.progressBar_2.setValue(0)
             pass 
-
         cur.close() if cur is not None else None
         conn.close() if conn is not None else None
 
-    def dumper(self, cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val):
+    def dumper(self, cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val, type):
         pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
         pg_path = pg_path.replace('/', '\\')
-        if self.dlg.checkBox.isChecked():
-            pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\{}_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
-        else:
-            pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\{}_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
+        if self.dlg.checkBox.isChecked() and type != 'view':
+            dump_nbr = '4'
+            pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\données\{}_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
+            task = DumpTask(pg_string)
+            QgsApplication.taskManager().addTask(task)
+            while QgsApplication.taskManager().count() > 0:
+                QCoreApplication.processEvents()
+        if type != 'view': 
+            dump_nbr = '3'
+        pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\structures\{}_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
         task = DumpTask(pg_string)
         QgsApplication.taskManager().addTask(task)
         while QgsApplication.taskManager().count() > 0:
             QCoreApplication.processEvents()
-        if self.dlg.checkBox_2.isChecked():
-            file_object = open(r'{}\{}_{}.sql'.format(folder, dump_nbr, table), 'r+', encoding="cp1252")
-            content = file_object.read()
-            file_object.seek(0,0)
-            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
-            file_object.close()
+        file_object = open(r'{}\structures\{}_{}.sql'.format(folder, dump_nbr, table), 'r+', encoding="cp1252")
+        content = file_object.read()
+        file_object.seek(0,0)
+        file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
+        file_object.close()
         # ENUMS
         cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
         columns_table = cur.fetchall()
@@ -311,6 +311,10 @@ class Productor:
                 encoding = 'UTF8'
             if os.path.exists(folder) is False : 
                 os.mkdir(folder)
+                if os.path.exists(folder + '\\structures') is False:
+                    os.mkdir(folder + '\\structures')
+                if os.path.exists(folder + '\\données') is False:
+                    os.mkdir(folder + '\\données')
             self.dlg.progressBar.setValue(progress)
             for nb, table in enumerate(tables) :
                 progress = int((nb + 1) * 100 / total)
@@ -336,11 +340,14 @@ class Productor:
                         for view_table in view_tables : 
                             schema_view, table_view = view_table.split('.')
                             dump_nbr = "3"
-                            self.dumper(cur, url, encoding, schema_view, table_view, database, folder, dump_nbr, nb, total, cst_val)
-                        dump_nbr = "4"
+                            type = 'table'
+                            self.dumper(cur, url, encoding, schema_view, table_view, database, folder, dump_nbr, nb, total, cst_val, type)
+                        dump_nbr = "5"
+                        type = 'view'
                     else : 
                         dump_nbr = "3"
-                self.dumper(cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val)
+                        type = 'table'
+                self.dumper(cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val, type)
             self.dlg.progressBar.setValue(0)
             cur.close() 
             conn.close() 
@@ -363,6 +370,12 @@ class Productor:
         self.folder_path_import = self.folder_path_import.replace('/', '\\')
         if self.folder_path_import:
             self.dlg.lineEdit_3.setText(self.folder_path_import)
+    
+    def choose_3(self):
+        self.folder_path_import = QFileDialog.getExistingDirectory(self.dlg, 'Select Folder')
+        self.folder_path_import = self.folder_path_import.replace('/', '\\')
+        if self.folder_path_import:
+            self.dlg.lineEdit_7.setText(self.folder_path_import)
 
     def connection(self) : 
         if self.dlg.lineEdit_2.text() != 'sigli' : 
@@ -374,7 +387,7 @@ class Productor:
             cur = conn.cursor()
             cur.execute("SELECT schema_name FROM information_schema.schemata WHERE schema_name !~ '^(pg_|information_schema)';")
             rows = cur.fetchall()
-            list = [row[0] for row in rows]
+            list = sorted([row[0] for row in rows])
             self.dlg.comboBox_2.clear()
             self.dlg.comboBox_3.clear()
             self.dlg.comboBox_3.addItems(list)
@@ -388,6 +401,84 @@ class Productor:
         cur.close() if cur and not cur.closed else None
         conn.close() if conn and not conn.closed else None
 
+    def connection_2(self):
+        if self.dlg.lineEdit_6.text() != 'sigli' : 
+            conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
+        else :
+            conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
+        try :
+            conn = psycopg2.connect(conn_string)
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT  n.nspname || '.' || t.typname AS type FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E'")
+            rows = cur.fetchall()
+            list = sorted([row[0] for row in rows])
+            self.dlg.comboBox.clear()
+            self.dlg.comboBox.addItems(list)
+            self.dlg.lineEdit_6.setStyleSheet(f'QWidget {{background-color:  #009900;}}')
+        except Exception as err :
+            self.dlg.lineEdit_6.setStyleSheet(f'QWidget {{background-color:  #ff0000;}}')
+            self.error_dialog = QErrorMessage()
+            self.error_dialog.showMessage('Erreur de Connection' + ':' + str(err))
+            cur.close()
+            conn.close()
+        cur.close() if cur and not cur.closed else None
+        conn.close() if conn and not conn.closed else None
+
+    def enum_fill_table(self):
+        if self.dlg.lineEdit_6.text() != 'sigli':
+            conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
+        else:
+            conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
+        try:
+            conn = psycopg2.connect(conn_string)
+            cur = conn.cursor()
+            enum = self.dlg.comboBox.currentText()
+            cur.execute("SELECT enumlabel FROM pg_enum WHERE enumtypid = '{}'::regtype;".format(enum))
+            values = {row[0] for row in cur.fetchall()}
+            self.dlg.listWidget.clear()
+            for value in sorted(values):
+                item = QListWidgetItem(value)
+                item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable | QtCore.Qt.ItemIsDragEnabled)
+                self.dlg.listWidget.addItem(item)
+        except psycopg2.Error as err:
+            self.error_dialog = QErrorMessage()
+            self.error_dialog.showMessage('Erreur de chargement des valeurs d''énumérations' + ':' + str(err))
+        finally:
+            cur.close() if cur else None
+            conn.close() if conn else None
+
+    def enumerations(self): 
+        try :
+
+            if self.dlg.lineEdit_6.text() != 'sigli' : 
+                conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
+            else :
+                conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
+            conn = psycopg2.connect(conn_string)
+            cur = conn.cursor()
+            folder = self.dlg.lineEdit_7.text()
+            progress = 10
+            self.dlg.progressBar_3.setValue(progress)
+            file_object = open('{}\\1_enums.sql'.format(folder), 'w', encoding="cp1252")
+            if file_object.tell() == 0 :
+                file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
+                file_object.write('--Création des Enumérations\n')
+            values = [self.dlg.listWidget.item(index).text() for index in range(self.dlg.listWidget.count())]
+            enum_values = ", ".join(["'{}'".format(value.replace("'", "''")) for value in values])
+            enum_name = self.dlg.comboBox.currentText()
+            enum_old = "ALTER TYPE {enum_name} RENAME TO {enum_name}_old;".format(enum_name = enum_name)
+            enum_string = "CREATE TYPE {enum_name} AS ENUM ({enum_values});".format(enum_name=enum_name, enum_values=enum_values)
+            self.iface.messageBar().pushMessage(str(enum_string), level=Qgis.Critical, duration=3)
+            cur.close()
+            conn.close()
+            file_object.write('{}\n'.format(enum_old))
+            file_object.write('{}\n'.format(enum_string))
+            file_object.close()
+            self.dlg.progressBar_3.setValue(0)
+        except Exception as e :
+            self.dlg.progressBar_3.setValue(0)
+            pass
+    
     def closeEvent(self, event):
         self.dlg.comboBox_2.clear()
         self.dlg.comboBox_3.clear()
