@@ -449,7 +449,6 @@ class Productor:
 
     def enumerations(self): 
         try :
-
             if self.dlg.lineEdit_6.text() != 'sigli' : 
                 conn_string = 'postgresql://@bdsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
             else :
@@ -459,20 +458,28 @@ class Productor:
             folder = self.dlg.lineEdit_7.text()
             progress = 10
             self.dlg.progressBar_3.setValue(progress)
+            cur.execute("SELECT DISTINCT c.column_name, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND n.nspname || '.' || t.typname = '{}'".format(self.dlg.comboBox.currentText()))
+            column_table_dict = {row[1]: row[0] for row in cur.fetchall()}
             file_object = open('{}\\1_enums.sql'.format(folder), 'w', encoding="cp1252")
             if file_object.tell() == 0 :
                 file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
-                file_object.write('--Création des Enumérations\n')
+                file_object.write('--Création des Enumérations\n\n')
             values = [self.dlg.listWidget.item(index).text() for index in range(self.dlg.listWidget.count())]
             enum_values = ", ".join(["'{}'".format(value.replace("'", "''")) for value in values])
             enum_name = self.dlg.comboBox.currentText()
             enum_old = "ALTER TYPE {enum_name} RENAME TO {enum_name}_old;".format(enum_name = enum_name)
             enum_string = "CREATE TYPE {enum_name} AS ENUM ({enum_values});".format(enum_name=enum_name, enum_values=enum_values)
-            self.iface.messageBar().pushMessage(str(enum_string), level=Qgis.Critical, duration=3)
             cur.close()
             conn.close()
-            file_object.write('{}\n'.format(enum_old))
-            file_object.write('{}\n'.format(enum_string))
+            file_object.write('--Rennomage de l\'ancienne énumération\n')
+            file_object.write('{}\n\n'.format(enum_old))
+            file_object.write('--Création du nouvel énumérateur\n')
+            file_object.write('{}\n\n'.format(enum_string))
+            file_object.write('--Recast des types\n')
+            for key, value in column_table_dict.items():
+                enum_recast = "ALTER TABLE {key} ALTER COLUMN {value} TYPE {enum_name} USING {value}::text::{enum_name};".format(value=value, key=key, enum_name=enum_name)
+                file_object.write('{}\n'.format(enum_recast))
+            file_object.write('\n')
             file_object.close()
             self.dlg.progressBar_3.setValue(0)
         except Exception as e :
