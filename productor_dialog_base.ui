@@ -73,6 +73,7 @@
          </item>
          <item>
           <layout class="QHBoxLayout" name="horizontalLayout_5">
+          <!--
            <item>
             <widget class="QCheckBox" name="checkBox">
              <property name="text">
@@ -80,6 +81,7 @@
              </property>
             </widget>
            </item>
+           -->
           </layout>
          </item>
          <item>

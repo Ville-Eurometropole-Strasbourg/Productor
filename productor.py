@@ -260,7 +260,7 @@ class Productor:
         """
         if type != 'view': 
             dump_nbr = '3'
-        pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\structures\{}_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
+        pg_string = r'{} --host {} --port 34000 --format=p --schema-only --no-privileges --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\structures\{}_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
         task = DumpTask(pg_string)
         QgsApplication.taskManager().addTask(task)
         while QgsApplication.taskManager().count() > 0:
@@ -300,12 +300,34 @@ class Productor:
         if file_object.tell() == 0 :
             file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
             file_object.write('--Création des Fonctions\n')
-        for table in table_list_functions:
-            cur.execute("SELECT pg_get_functiondef('{}'::regproc)".format(table))
+        for table_func in table_list_functions:
+            cur.execute("SELECT pg_get_functiondef('{}'::regproc)".format(table_func))
             function = cur.fetchone()
             if function[0] not in self.written_functions:
                 file_object.write('{};\n'.format(function[0]))
                 self.written_functions.append(function[0])
+        file_object.close()
+        # GRANTS
+        cur.execute("""
+                    SELECT 
+                    'GRANT ' || string_agg(privilege_type, ', ') || ' ON TABLE ' || table_schema || '.' || table_name || ' TO ' || grantee || ';' AS grant_command
+                    FROM 
+                    information_schema.table_privileges 
+                    WHERE 
+                    table_schema = '{}' AND 
+                    table_name = '{}'
+                    GROUP BY 
+                    grantee, 
+                    table_schema, 
+                    table_name; 
+                    """.format(schema, table))
+        result_table_grants = cur.fetchall()
+        file_object = open('{}\\5_grants.sql'.format(folder), 'a', encoding="cp1252")
+        if file_object.tell() == 0 :
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
+            file_object.write('--Création des Grants\n')
+        for grant in result_table_grants : 
+            file_object.write('{}\n'.format(grant[0]))
         file_object.close()
         progress = int((nb + 1) * 100 / total)
         self.dlg.progressBar.setValue(progress) 
