@@ -32,7 +32,7 @@ class RestoreTask(QgsTask):
         except Exception as e:
             QgsMessageLog.logMessage(str(e), 'Productor', level=Qgis.Critical)
             return False
-       
+     
 class DumpTask(QgsTask):
     def __init__(self, pg_string):
         super().__init__('Dumping table')
@@ -131,8 +131,20 @@ class Productor:
         self.dlg.pushButton_5.clicked.connect(self.connection_2)
         self.dlg.comboBox.activated.connect(self.enum_fill_table)
         self.dlg.pushButton_6.clicked.connect(self.enumerations)
+        self.dlg.add_enum.clicked.connect(self.add_enum)
+        self.dlg.delete_enum.clicked.connect(self.delete_enum)
         self.dlg.show()
         self.dlg.closeEvent = self.closeEvent
+
+    def add_enum(self): 
+        item = QListWidgetItem('Nouvelle valeur')
+        item.setFlags(item.flags() | QtCore.Qt.ItemIsEditable | QtCore.Qt.ItemIsDragEnabled)
+        self.dlg.listWidget.addItem(item)
+
+    def delete_enum(self):
+        current_item = self.dlg.listWidget.currentItem()
+        if current_item is not None:
+            self.dlg.listWidget.takeItem(self.dlg.listWidget.row(current_item))
 
     def table(self):
         if self.dlg.lineEdit_2.text() != 'sigli':
@@ -193,28 +205,38 @@ class Productor:
                             cur.execute(sql)
                         except psycopg2.errors.DuplicateObject:
                             conn.rollback()
-                        conn.commit() 
+                        conn.commit()
+                first_pass = 1 
             files = os.listdir(folder + '\\structures')                   
             for file in files:
                 name, ext = os.path.splitext(file)
                 if ext == ".sql":
-                    with open('{}\\structures\\{}'.format(folder, file), 'r', encoding="cp1252") as f:
+
+                    with open('{}\\structures\\{}'.format(folder, file), 'r', encoding="UTF8") as f:
                         sql = f.read()
                         try:
+                            self.iface.messageBar().pushMessage("restore ok", level=Qgis.Critical)
                             cur.execute(sql)
-                        except Exception:
+                        except Exception as e :
+                            self.iface.messageBar().pushMessage(str(e), level=Qgis.Critical)
                             conn.rollback()
                         conn.commit() 
+            """
             files = os.listdir(folder + '\\données')                   
             for file in files:
                 name, ext = os.path.splitext(file)
                 if ext == ".backup":
+                    parts = name.split("__-__")
+                    schema = parts[0].split("_")[1]
+                    table = parts[1]
+                    cur.execute("SELECT admin_sigli.devalide_triggers('{}', '{}');".format(schema, table))
                     pg_string = r'{} --host bdsigli.cus.fr --port 34000 --no-owner --username "{}"  --data-only  --dbname "{}" "{}\\données\\{}" '.format(pg_path, database, database, folder, file)
                     task = RestoreTask(pg_string, self.dlg.lineEdit_5.text())
                     QgsApplication.taskManager().addTask(task)
                     while QgsApplication.taskManager().count() > 0:
                         QCoreApplication.processEvents()  
-                first_pass = 1
+                    cur.execute("SELECT admin_sigli.valide_triggers('{}', '{}');".format(schema, table))
+            """
         except Exception as e : 
             self.error_dialog = QErrorMessage()
             
@@ -227,13 +249,15 @@ class Productor:
     def dumper(self, cur, url, encoding, schema, table, database, folder, dump_nbr, nb, total, cst_val, type):
         pg_path = str(os.path.join(os.path.dirname(__file__))) + "\\include\\python\\pg_dump.exe"
         pg_path = pg_path.replace('/', '\\')
+        """
         if self.dlg.checkBox.isChecked() and type != 'view':
             dump_nbr = '4'
-            pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\données\{}_{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
+            pg_string = r'{} --host {} --port 34000 --format=c --no-owner --data-only --encoding {} --table {}.{} {} > "{}\données\{}_{}__-__{}.backup"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, schema, table)
             task = DumpTask(pg_string)
             QgsApplication.taskManager().addTask(task)
             while QgsApplication.taskManager().count() > 0:
                 QCoreApplication.processEvents()
+        """
         if type != 'view': 
             dump_nbr = '3'
         pg_string = r'{} --host {} --port 34000 --format=p --schema-only  --no-owner --section=data --section=pre-data --section=post-data --encoding {} --table {}.{} {} > "{}\structures\{}_{}.sql"'.format(pg_path, url, encoding, schema, table, database, folder, dump_nbr, table)
@@ -242,10 +266,11 @@ class Productor:
         while QgsApplication.taskManager().count() > 0:
             QCoreApplication.processEvents()
         file_object = open(r'{}\structures\{}_{}.sql'.format(folder, dump_nbr, table), 'r+', encoding="cp1252")
-        content = file_object.read()
-        file_object.seek(0,0)
-        file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
-        file_object.close()
+        if encoding != 'UTF8':
+            content = file_object.read()
+            file_object.seek(0,0)
+            file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n' + content)
+            file_object.close()
         # ENUMS
         cur.execute("SELECT c.column_name, n.nspname || '.' || t.typname AS type, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND c.table_name = '{}'".format(table))
         columns_table = cur.fetchall()
@@ -455,11 +480,14 @@ class Productor:
                 conn_string = 'postgresql://@bpsigli.cus.fr:34000/{}'.format(self.dlg.lineEdit_6.text())
             conn = psycopg2.connect(conn_string)
             cur = conn.cursor()
+            enum_list = []
             folder = self.dlg.lineEdit_7.text()
             progress = 10
             self.dlg.progressBar_3.setValue(progress)
-            cur.execute("SELECT DISTINCT c.column_name, c.table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND n.nspname || '.' || t.typname = '{}'".format(self.dlg.comboBox.currentText()))
-            column_table_dict = {row[1]: row[0] for row in cur.fetchall()}
+            cur.execute("SELECT DISTINCT c.column_name, c.table_schema || '.' || c.table_name AS table_name FROM information_schema.columns c JOIN pg_type t ON c.udt_name = t.typname JOIN pg_namespace n ON t.typnamespace = n.oid LEFT JOIN pg_namespace n1 ON t.typnamespace = n1.oid JOIN information_schema.tables t2 ON c.table_schema = t2.table_schema AND c.table_name = t2.table_name WHERE t.typcategory = 'E' AND n.nspname || '.' || t.typname = '{}'".format(self.dlg.comboBox.currentText()))
+            curfetch = cur.fetchall()
+            column_table_dict = {row[1]: row[0] for row in curfetch}
+            table_column_dict = {row[0]: row[1] for row in curfetch}
             file_object = open('{}\\1_enums.sql'.format(folder), 'w', encoding="cp1252")
             if file_object.tell() == 0 :
                 file_object.write('--########### encodage fichier cp1252 ###(controle: n°1: éàçêè )####\n')
@@ -467,7 +495,8 @@ class Productor:
             values = [self.dlg.listWidget.item(index).text() for index in range(self.dlg.listWidget.count())]
             enum_values = ", ".join(["'{}'".format(value.replace("'", "''")) for value in values])
             enum_name = self.dlg.comboBox.currentText()
-            enum_old = "ALTER TYPE {enum_name} RENAME TO {enum_name}_old;".format(enum_name = enum_name)
+            table_name = enum_name.split(".")[1]
+            enum_old = "ALTER TYPE {enum_name} RENAME TO {table_name}_old;".format(enum_name = enum_name, table_name = table_name)
             enum_string = "CREATE TYPE {enum_name} AS ENUM ({enum_values});".format(enum_name=enum_name, enum_values=enum_values)
             cur.close()
             conn.close()
@@ -475,11 +504,22 @@ class Productor:
             file_object.write('{}\n\n'.format(enum_old))
             file_object.write('--Création du nouvel énumérateur\n')
             file_object.write('{}\n\n'.format(enum_string))
+            file_object.write('\n\n')
+            file_object.write('-- !! EFFECTUER VOS OPERATION DE CHANGEMENT DANS LES TABLES ICI CI BESOIN. POUR RAJOUTER UNE VALEUR, MODIFIER L\'ENUM_OLD AVANT !! --\n')
+            file_object.write('\n\n')
             file_object.write('--Recast des types\n')
             for key, value in column_table_dict.items():
                 enum_recast = "ALTER TABLE {key} ALTER COLUMN {value} TYPE {enum_name} USING {value}::text::{enum_name};".format(value=value, key=key, enum_name=enum_name)
                 file_object.write('{}\n'.format(enum_recast))
+                enum_list.append(enum_recast)
+            for key, value in table_column_dict.items():
+                enum_recast = "ALTER TABLE {value} ALTER COLUMN {key} TYPE {enum_name} USING {key}::text::{enum_name};".format(value=value, key=key, enum_name=enum_name)
+                if enum_recast not in enum_list:
+                    file_object.write('{}\n'.format(enum_recast))
             file_object.write('\n')
+            file_object.write('--Supression de l\'ancienne énumération\n')
+            enum_drop = "DROP TYPE {enum_name}_old ;".format(enum_name=enum_name, enum_values=enum_values)
+            file_object.write('{}\n'.format(enum_drop))
             file_object.close()
             self.dlg.progressBar_3.setValue(0)
         except Exception as e :
