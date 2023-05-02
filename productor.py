@@ -215,12 +215,20 @@ class Productor:
                     with open('{}\\structures\\{}'.format(folder, file), 'r', encoding="UTF8") as f:
                         sql = f.read()
                         try:
-                            self.iface.messageBar().pushMessage("restore ok", level=Qgis.Critical)
                             cur.execute(sql)
                         except Exception as e :
-                            self.iface.messageBar().pushMessage(str(e), level=Qgis.Critical)
                             conn.rollback()
                         conn.commit() 
+            files = os.listdir(folder)
+            for file in files:
+                if file == "5_grants.sql":
+                    with open('{}\\5_grants.sql'.format(folder), 'r', encoding="cp1252") as f:
+                        sql = f.read()
+                        try:
+                            cur.execute(sql)
+                        except psycopg2.errors.DuplicateObject:
+                            conn.rollback()
+                        conn.commit()
             """
             files = os.listdir(folder + '\\données')                   
             for file in files:
