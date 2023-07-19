@@ -10,7 +10,7 @@ about=Ce plugin permet de générer le SQL pour les passages en production de co
 tracker=https://github.com/cazitouni/productor/issues
 repository=https://github.com/cazitouni/productor
 changelog=version 1.0: Version initiale
-                  1.2: Ajout des enumerations et du dump/restore
+          version 1.2: Ajout des enumerations et du dump/restore
 tags=strasbourg, sigli, production, dev, sql 
 homepage=https://github.com/cazitouni/productor
 category=Plugins
